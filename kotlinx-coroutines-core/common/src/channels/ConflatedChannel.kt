@@ -29,14 +29,14 @@ internal open class ConflatedChannel<E> : AbstractChannel<E>() {
     var size = 0
 
     // result is `OFFER_SUCCESS | Closed`
-    public override fun offerInternal(element: E): Any {
+    protected override fun offerInternal(element: E): Any {
         var receive: ReceiveOrClosed<E>? = null
         lock.withLock {
             closedForSend?.let { return it }
             // if there is no element written in buffer
             if (size == 0) {
                 // check for receivers that were waiting on the empty buffer
-                loop@ while (true) {
+                loop@ while(true) {
                     receive = takeFirstReceiveOrPeekClosed() ?: break@loop // break when no receivers queued
                     if (receive is Closed) {
                         return receive!!
@@ -104,7 +104,19 @@ internal open class ConflatedChannel<E> : AbstractChannel<E>() {
     }
 
     // result is `E | POLL_FAILED | Closed`
-    protected override fun pollSelectInternal(select: SelectInstance<*>): Any? = pollInternal()
+    protected override fun pollSelectInternal(select: SelectInstance<*>): Any? {
+        var result: Any? = null
+        lock.withLock {
+            if (size == 0) return closedForSend ?: POLL_FAILED // when nothing can be read from buffer
+            // size > 0: not empty -> retrieve element
+            if (!select.trySelect())
+                return ALREADY_SELECTED
+            result = buffer
+            buffer = null
+            size = 0
+        }
+        return result
+    }
 
     // Note: this function is invoked when channel is already closed
     protected override fun onCancelIdempotent(wasClosed: Boolean) {
